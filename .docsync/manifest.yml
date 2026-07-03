@@ -1,0 +1,148 @@
+# docsync manifest — maps each doc page to the source code it documents.
+# Reset to greenfield; `docsync bootstrap` will re-seed anchors from ai-chat-server
+# (including the n8n orchestration layer). Run `docsync doctor` to keep them honest.
+pages:
+  - path: getting-started/introduction.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - ARCHITECTURE.md
+          - CLAUDE.md
+          - index.js
+          - server.js
+          - ecosystem.config.js
+    judge_required: true
+  - path: getting-started/quick-start.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - server.js
+          - index.js
+          - loadSecrets.js
+          - package.json
+          - vite.config.js
+    judge_required: true
+  - path: concepts/architecture-overview.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - ARCHITECTURE.md
+          - index.js
+          - server.js
+          - routes/**/*.js
+          - services/**/*.js
+          - middleware/**/*.js
+    judge_required: true
+  - path: concepts/chat-conversation-engine.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - routes/chatSessions.js
+          - routes/chatN8n.js
+          - routes/conversationEngine.js
+          - services/conversationEngine.js
+    judge_required: true
+  - path: concepts/authentication-system.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - middleware/authMiddleware.js
+          - middleware/authenticateUser.js
+          - middleware/clientPermissionMiddleware.js
+          - routes/auth.js
+          - services/auth.js
+          - services/tokenBlacklist.js
+    judge_required: true
+  - path: concepts/reporting-system.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - services/reports/**/*.js
+          - services/reportsV2/**/*.js
+          - routes/reports.js
+          - routes/reportsV2.js
+          - services/reportScheduler.js
+          - services/reportSchedulerUtils.js
+    judge_required: true
+  - path: concepts/llm-integration.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - services/llm/**/*.js
+          - services/mcp/**/*.js
+          - services/ocr/**/*.js
+          - routes/embeddings.js
+          - services/llm/bedrockClient.js
+          - services/llm/embeddingsClient.js
+          - services/llm/mcpBedrockAgentClient.js
+    judge_required: true
+  - path: architecture/data-flow.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - routes/chatSessions.js
+          - services/conversationEngine.js
+          - services/llm/**/*.js
+          - routes/embeddings.js
+          - routes/messagesFeedback.js
+          - services/db.js
+    judge_required: true
+  - path: architecture/mcp-server-design.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - mcp-server/MCP-STRUCTURE.md
+          - mcp-server/README.md
+          - mcp-server/src/**/*.ts
+        symbols:
+          - registerBusinessRules
+          - registerClientConfig
+          - registerEnumValues
+          - registerExecuteQuery
+          - registerProductCategories
+          - registerQueryPattern
+          - registerSchemaAnnotations
+          - registerTableSchema
+    judge_required: true
+  - path: reference/chat-routes.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - routes/chatSessions.js
+          - routes/chatN8n.js
+          - routes/conversationEngine.js
+          - routes/messagesFeedback.js
+  - path: reference/services-api.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - services/db.js
+          - services/conversationEngine.js
+          - services/emailClient.js
+          - services/gmailClient.js
+          - services/llm/**/*.js
+          - services/currencyConverter.js
+          - services/unitConverter.js
+          - services/otp.js
+  - path: reference/mcp-tools.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - mcp-server/src/tools/**/*.ts
+        symbols:
+          - registerBusinessRules
+          - registerClientConfig
+          - registerEnumValues
+          - registerExecuteQuery
+          - registerProductCategories
+          - registerQueryPattern
+          - registerSchemaAnnotations
+          - registerTableSchema
+  - path: reference/database-layer.mdx
+    sources:
+      - repo: ai-chat-server
+        globs:
+          - services/db.js
+          - mcp-server/src/db.ts
+        symbols:
+          - getPool

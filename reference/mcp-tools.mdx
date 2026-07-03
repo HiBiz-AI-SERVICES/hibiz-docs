@@ -1,0 +1,106 @@
+---
+title: MCP Tools Reference
+description: Complete registry of the MCP tools — business rules, client config, schema introspection, enums, and query execution — and the register* functions that wire them onto the server.
+---
+
+This page is the registry of the Model Context Protocol (MCP) tools exposed by this server and the `register*` functions that install them. Reach for it when you need to know which tools an MCP client can call, what each one is for, and where its registration lives.
+
+Each tool is installed by a dedicated `register…` function at server startup. Grouped by purpose, the tools cover four areas: **schema introspection** (table schemas, enum values, annotations, product categories), **query execution**, **query patterns / business rules**, and **client configuration**.
+
+<Note>
+This reference documents the tool surface by name and responsibility. Where the source does not pin down an exact parameter or return shape, this page describes the tool's role rather than inventing a signature — confirm precise arguments against the registrar's implementation before relying on them.
+</Note>
+
+## Tool registry at a glance
+
+Every tool is added to the MCP server by calling its `register*` function during setup. The table maps each registrar to the tool it installs and that tool's job.
+
+| Registrar | Area | Purpose |
+|-----------|------|---------|
+| `registerTableSchema` | Schema introspection | Exposes table/column schema so a client can discover the data model. |
+| `registerSchemaAnnotations` | Schema introspection | Serves human-authored annotations/descriptions layered on top of the raw schema. |
+| `registerEnumValues` | Schema introspection | Returns the allowed values for enumerated columns/fields. |
+| `registerProductCategories` | Schema introspection | Returns the product category taxonomy used to constrain and interpret queries. |
+| `registerQueryPattern` | Query guidance | Provides reusable query patterns/templates that guide how to construct valid queries. |
+| `registerBusinessRules` | Query guidance | Surfaces the business rules and constraints that queries must respect. |
+| `registerClientConfig` | Configuration | Exposes client-facing configuration for the MCP session. |
+| `registerExecuteQuery` | Execution | Runs a query against the backing data source and returns results. |
+
+## Schema introspection tools
+
+These tools let an MCP client learn the shape of the data before it queries. Call them first to ground query construction in the real schema rather than assumptions.
+
+### `registerTableSchema`
+
+Registers the tool that returns table and column schema information, giving the client the structural map of the data model (tables, columns, and their types).
+
+- **Area:** schema introspection
+- **Typical use:** discovery — enumerate available tables/columns before building a query.
+- **Pairs with:** `registerSchemaAnnotations` for descriptions, `registerEnumValues` for allowed values.
+
+### `registerSchemaAnnotations`
+
+Registers the tool that serves annotations describing the schema — the human-readable meaning, notes, or usage guidance attached to tables and columns.
+
+- **Area:** schema introspection
+- **Typical use:** interpret what a column *means*, beyond its raw type.
+- **Relationship:** complements `registerTableSchema`; annotations reference the same tables/columns.
+
+### `registerEnumValues`
+
+Registers the tool that returns the permitted values for enumerated fields, so queries filter on valid options instead of guessing string literals.
+
+- **Area:** schema introspection
+- **Typical use:** resolve the legal set of values for an enum-typed column before filtering on it.
+
+### `registerProductCategories`
+
+Registers the tool that returns the product category taxonomy, the domain vocabulary used to scope and interpret product-related queries.
+
+- **Area:** schema introspection
+- **Typical use:** map a user's intent onto known product categories before querying.
+
+## Query guidance tools
+
+These tools encode *how* to query correctly — the patterns to follow and the rules the results must satisfy. They constrain query construction so generated queries stay valid and policy-compliant.
+
+### `registerQueryPattern`
+
+Registers the tool that provides query patterns — reusable templates or exemplars that show how to structure a valid query for common intents.
+
+- **Area:** query guidance
+- **Typical use:** retrieve a starting pattern rather than composing a query from scratch.
+
+### `registerBusinessRules`
+
+Registers the tool that surfaces the business rules and constraints governing queries and their results, so a client can respect domain policy.
+
+- **Area:** query guidance
+- **Typical use:** check which rules apply before executing, and interpret results within those constraints.
+
+## Configuration tool
+
+### `registerClientConfig`
+
+Registers the tool that exposes client-facing configuration for the MCP session — the settings a connecting client needs to operate against this server.
+
+- **Area:** configuration
+- **Typical use:** fetch session/client configuration at connection time.
+
+## Execution tool
+
+### `registerExecuteQuery`
+
+Registers the tool that executes a query against the backing data source and returns its results. This is the terminal action after the schema and guidance tools have been used to build a valid query.
+
+- **Area:** execution
+- **Typical use:** run the constructed query and receive result rows.
+- **Precede with:** the schema introspection and query guidance tools so the query is valid before it runs.
+
+<Tip>
+A typical client flow moves left-to-right across the areas: introspect the schema (`registerTableSchema`, `registerEnumValues`, `registerSchemaAnnotations`, `registerProductCategories`) → consult guidance (`registerQueryPattern`, `registerBusinessRules`) → execute (`registerExecuteQuery`), with `registerClientConfig` read once at connection.
+</Tip>
+
+## Registering the tools
+
+All tools are installed by invoking their `register*` functions against the MCP server instance during startup. Adding a new tool follows the same convention: implement a `register<Name>` function that attaches the tool to the server, then call it alongside the others so it is available to connecting clients.

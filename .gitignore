@@ -1,0 +1,11 @@
+# docsync run state + build artifacts (not part of the published docs)
+.docsync/state/
+.docsync/bootstrap-report.md
+docsync-bootstrap.patch
+
+# Mintlify local dev cache
+.mintlify/
+node_modules/
+
+# OS noise
+.DS_Store

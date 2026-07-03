@@ -1,0 +1,14 @@
+# docsync config — only non-default keys are shown.
+# See DocsyncConfig in models.py for every option and its default.
+adapter: mintlify
+docs_root: .
+repo_mode: single
+
+# Prune non-product noise from ingest (on top of the built-in set: node_modules,
+# dist, build, tests, .git, …). Keeps the plan focused on the backend + n8n +
+# mcp-server + prompts + ARCHITECTURE.md, not the bundled static site/frontend build.
+ingest_exclude_dirs:
+  - public
+  - backoffice-website
+  - .claude
+  - assets

@@ -1,0 +1,95 @@
+---
+title: Quick Start
+description: Set up your environment, run the AI chat server backend and Vite frontend locally, and confirm your first request in minutes.
+---
+
+This guide walks you through running the AI chat server on your own machine: installing dependencies, creating a local `.env`, starting the backend and the Vite dev server, and confirming the stack responds. Reach for it the first time you clone the project or when you need a clean local environment to develop against.
+
+The app has two runtime pieces that talk to each other locally:
+
+- **Backend** — an Express server started via `server.js`, listening on port **3000**.
+- **Frontend** — a React app served by Vite on port **5173**, which proxies `/api` and `/chat` calls to the backend.
+
+## Prerequisites
+
+Have these ready before you start:
+
+| Requirement | Why |
+|-------------|-----|
+| Node.js + npm | Runs both the Express backend and the Vite dev server. |
+| A local `.env` file | In non-production, `loadSecrets.js` loads configuration via `dotenv`. |
+| Repository cloned locally | You run every command from the project root. |
+
+<Warning>
+Do **not** set `NODE_ENV=production` locally. When `NODE_ENV === 'production'`, `loadSecrets.js` skips `.env` and instead fetches secrets from AWS Secrets Manager (`hibiz/production`, region `us-east-1`) — and exits the process on failure. Leave `NODE_ENV` unset (or `development`) for local work.
+</Warning>
+
+## Run the server locally
+
+<Steps>
+<Step title="Install dependencies">
+From the project root:
+
+```bash
+npm install
+```
+</Step>
+
+<Step title="Create your .env file">
+The backend entry point loads secrets before anything else. In non-production, `loadSecrets()` calls `require('dotenv').config()`, so any values you need must live in a `.env` file at the project root:
+
+```bash
+# .env
+# Add the configuration your routes and providers require.
+# Optional: extra allowed CORS origins (comma-separated).
+CORS_ORIGINS=http://localhost:5173
+```
+
+`CORS_ORIGINS` is appended to the built-in allowlist. `localhost`, `127.0.0.1`, and the project's production domains are already permitted, so you usually don't need to add local origins.
+</Step>
+
+<Step title="Start the backend">
+```bash
+node server.js
+```
+
+`server.js` awaits `loadSecrets()`, then requires `./index`, which builds the Express app — security headers (helmet), rate limiting, CORS, JSON/urlencoded body parsing (10 MB limit), cookie parsing, and all `/api/*` routes. On startup it also creates `public/reports/` if missing and serves the React bundle from `dist/` when present.
+</Step>
+
+<Step title="Start the frontend dev server">
+In a second terminal:
+
+```bash
+npm run dev
+```
+
+This launches Vite on **port 5173**. Its proxy forwards `/api` requests and `/chat` fetch/`POST` calls to `http://localhost:3000`, while continuing to serve the `/chat` *page* itself through Vite for hot-module reload.
+</Step>
+</Steps>
+
+## Verify it worked
+
+Open **`http://localhost:5173`** in your browser. If the page loads and network calls to `/api` and `/chat` reach the backend (no proxy errors in the Vite terminal), both processes are wired up correctly.
+
+To check the backend directly, send a request to the proxied chat endpoint:
+
+```bash
+curl -i http://localhost:3000/chat/status
+```
+
+A response from the server — rather than a connection-refused error — confirms the backend is up. The chat feature posts to `/chat` and polls `/chat/status`; exact request and response shapes are defined by the route handlers.
+
+<Note>
+If requests start returning `{ "success": false, "message": "Too many requests..." }`, you've hit a rate limit. The general API limiter allows **200 requests/minute per IP**; login (5/15 min), OTP (10/15 min), and per-user conversation/document limiters (30/min) are stricter. Wait out the window and retry.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+<Card title="API routes" icon="plug">
+Explore the mounted route groups under `/api/*` (admin, report schedules, suppliers, and more) to understand the available endpoints.
+</Card>
+<Card title="Configuration & secrets" icon="key">
+Review how `loadSecrets.js` switches between local `.env` and AWS Secrets Manager for production deploys.
+</Card>
+</CardGroup>

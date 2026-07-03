@@ -1,0 +1,238 @@
+---
+title: Chat Routes API
+description: REST endpoints of the ai-chat-server for sending chat messages, polling for asynchronous answers, browsing conversation history, running the conversation engine, and recording message feedback.
+---
+
+The chat routes of `ai-chat-server` expose the web chat surface: a fire-and-forget send endpoint backed by an n8n webhook, a polling endpoint for the answer, session/message history reads, the pre-SQL conversation engine, and a feedback sink. Reach for this page when you need exact request bodies, response shapes, auth requirements, and status codes for those endpoints.
+
+All routes are Express routers defined under `ai-chat-server/routes/`. Authentication is JWT-based — either a `token` cookie or an `Authorization: Bearer <token>` header. Chat, session, and feedback routes require a valid user token; the conversation engine is an internal endpoint (called by n8n) that instead enforces a client-ownership check.
+
+## Authentication & authorization model
+
+- **Token sources**: the JWT is read from `req.cookies.token` first, then from an `Authorization: Bearer` header.
+- **Admin bypass**: a user is treated as admin when `decoded.isHibizUser === 1` or `=== true`. Admins may act on any `platformUserId`; regular users are restricted to their own `userId`.
+- **Middleware**: `chatSessions.js` and `messagesFeedback.js` apply `authenticateUser` (from `../middleware/authenticateUser`) to every route via `router.use(...)`. `chatN8n.js` performs token verification inline with `verifyToken`.
+- **Conversation engine (K-1 check)**: `conversationEngine.js` does not verify a user JWT; it validates that the supplied `platformUserId` belongs to the claimed `clientid` against `dbo.PlatformUsers`, rejecting mismatches with `403`.
+
+<Note>
+Error messages on the chat send/status endpoints are returned in Hebrew (e.g. `אינך מחובר. אנא התחבר מחדש.` for an unauthenticated request). Client code should key on HTTP status codes, not message text.
+</Note>
+
+## POST /chat — send a message (async)
+
+Fires the n8n chat webhook in the background and returns immediately with a session id. The client then polls [`GET /chat/status`](#get-chat-status-poll-for-the-answer) for the assistant answer. Defined in `chatN8n.js`.
+
+### Request body
+
+| Field | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `userMessage` | string | Yes | The user's chat message. |
+| `platformUserId` | number \| string | Yes | Target platform user; parsed with `parseInt` (must be numeric). |
+| `sessionId` | string (GUID) | No | Existing conversation to continue. If omitted, a **new** session is always created (page refresh / new chat). |
+
+### Behavior
+
+1. Authenticates the JWT and authorizes the caller against `platformUserId` (admins may send on behalf of others).
+2. Looks up `ClientId` and `MobileNumber` from `dbo.PlatformUsers` where `IsActive = 1`.
+3. If no `sessionId` was provided, inserts a new row into `dbo.ConversationSessions` with `Source = 'web'` and returns the generated `SessionId`.
+4. Fire-and-forget: generates dynamic "thinking steps" (stored in the in-memory `thinkingStepsStore`) and posts the payload to n8n with a 180 000 ms timeout.
+5. When n8n responds, the answer is post-processed (error detection, PDF-store override, viz wrapping) and persisted via `saveMessage` as an `assistant` message so the polling endpoint can find it.
+
+The payload forwarded to n8n contains: `ClientId`, `sessionId`, `whatsapp_number` (the user's `MobileNumber`), `userMessage`, `PlatformUserId`, and `source: 'web'`.
+
+### Response — 200
+
+```json
+{ "sessionId": "…", "status": "processing", "since": "2026-07-03T12:00:00.000Z" }
+```
+
+`since` is an ISO timestamp; pass it back to `GET /chat/status`.
+
+### Error responses
+
+| Status | Condition | Body |
+|--------|-----------|------|
+| 401 | Missing token / invalid or expired token | `{ answer: "…" }` (Hebrew) |
+| 400 | Missing `userMessage`/`platformUserId`, or non-numeric `platformUserId` | `{ answer: "…" }` |
+| 403 | Non-admin sending on behalf of another user | `{ answer: "אין הרשאה לשלוח בשם משתמש אחר." }` |
+| 404 | No active user matches `platformUserId` | `{ answer: "משתמש לא נמצא." }` |
+| 500 | `N8N_CHAT_WEBHOOK_URL` unset, or unhandled error | `{ answer: "…" }` |
+
+### Answer post-processing
+
+The background handler shapes the stored answer as follows:
+
+- **n8n errors** are hidden: `isN8nError()` detects both the legacy array form `[{ response: "There was an error…" }]` and a plain `"There was an error…"` string, and replaces the answer with `לא הצלחתי לאחזר את הנתונים. נסה שוב.`.
+- **PDF override**: if `pdfResultStore` holds a URL for the session (set by the large-response PDF path with `source=web`), that URL becomes the answer and the store entry is deleted.
+- **Visualization wrapping**: when n8n returns a `viz` object (and there is no PDF and no error), the answer is stored as JSON `{ "__viz__": true, "type": "n8n", "text": <answer>, "viz": <viz> }`.
+
+## GET /chat/status — poll for the answer
+
+Returns the assistant response produced by the background n8n call after a `POST /chat`. Defined in `chatN8n.js`. Requires a valid JWT (same token sources as `POST /chat`).
+
+### Query parameters
+
+| Param | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `sessionId` | string | Yes | Session returned by `POST /chat`. |
+| `since` | string (ISO) | Yes | Timestamp from the `POST /chat` response; bounds the search for the new answer. |
+
+### Responses
+
+| Status | Body | Meaning |
+|--------|------|---------|
+| 200 | `{ "status": "processing" }` | Answer not ready yet — keep polling. |
+| 200 | `{ "status": "completed", "answer": "<string>" }` | Answer is ready. |
+| 400 | `{ "error": "sessionId and since are required" }` | Missing query params. |
+| 401 | `{ "error": "Unauthorized" }` | Missing/invalid token. |
+
+The handler consults the PDF result store before the message store when resolving the completed answer.
+
+## GET /api/chat-sessions — list a user's sessions
+
+Returns one row per conversation session for a platform user, newest activity first. Defined in `chatSessions.js`; mounted under `/api/chat-sessions`.
+
+### Query parameters
+
+| Param | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `platformUserId` | number | No | Target user. Defaults to the authenticated `req.user.userId`. Non-admins may only request their own id (else `403`). |
+
+### Response — 200
+
+```json
+{ "sessions": [ { "SessionId": "…", "StartedAt": "…", "LastAt": "…", "Preview": "…" } ] }
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `SessionId` | string | Conversation session id. |
+| `StartedAt` | datetime | `MIN(CreatedAt)` across the session's messages. |
+| `LastAt` | datetime | `MAX(CreatedAt)` — used for ordering (descending). |
+| `Preview` | string | First `user` message in the session. |
+
+Errors: `403` `{ error: "Forbidden" }` (unauthorized user id), `500` `{ error: "Server error" }`.
+
+## GET /api/chat-sessions/:sessionId/messages — session transcript
+
+Returns all messages for one session belonging to a platform user, oldest first. Defined in `chatSessions.js`.
+
+### Parameters
+
+| Name | In | Type | Required | Meaning |
+|------|----|------|----------|---------|
+| `sessionId` | path | string | Yes | Session whose messages to fetch. |
+| `platformUserId` | query | number | No | Target user; defaults to `req.user.userId`. Non-admins restricted to their own id. |
+
+### Response — 200
+
+```json
+{ "messages": [ { "Role": "user", "Message": "…", "CreatedAt": "…" } ] }
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `Role` | string | `user` or `assistant`. |
+| `Message` | string | Message text (may be a JSON-wrapped viz/PDF payload for assistant rows). |
+| `CreatedAt` | datetime | Creation timestamp; results ordered ascending. |
+
+Errors: `403` `{ error: "Forbidden" }`, `500` `{ error: "Server error" }`.
+
+## POST /api/conversation-engine — enrich & route
+
+Called by n8n **before** the SQL logic. Loads or creates the session, injects any pending clarification, runs the LLM analysis, and returns an enriched message plus a routing decision. Defined in `conversationEngine.js`; mounted under `/api/conversation-engine`.
+
+### Request body
+
+| Field | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `message` | string | Yes | The user message (must be a non-empty string after trim). |
+| `platformUserId` | number \| string | Yes | Platform user; `0` is accepted. WhatsApp sends an integer. |
+| `clientid` / `ClientId` | number \| string | No | Client id; `clientid` (lowercase) takes precedence, falling back to `ClientId`. Selects the business context and drives the K-1 check. |
+| `sessionId` | string | No | Existing session to use directly (web flow). If absent, `getOrCreateSession` is used. |
+| `source` | string | No | Origin; defaults to `'whatsapp'` when a session is created. |
+
+### Response — 200
+
+```json
+{ "enhancedMessage": "…", "needsSql": true, "route": "…", "state": { } }
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `enhancedMessage` | string | The message rewritten with conversation context for the SQL workflow. |
+| `needsSql` | boolean | **The only field that controls execution** — always explicitly boolean, never undefined. |
+| `route` | string | Informational only (logging / analytics / UI hints). |
+| `state` | object | Current conversation state. |
+
+### Error responses
+
+| Status | Condition | Body |
+|--------|-----------|------|
+| 400 | `platformUserId` missing (and not `0`) | `{ success: false, message: "platformUserId is required." }` |
+| 400 | `message` missing / not a non-empty string | `{ success: false, message: "message is required." }` |
+| 403 | K-1: `platformUserId`'s DB `ClientId` ≠ claimed `clientid` | `{ success: false, message: "Access denied." }` |
+| 500 | K-1 validation query error | `{ success: false, message: "Validation error." }` |
+
+<Note>
+K-1 check: if the `platformUserId` is **not found** in `dbo.PlatformUsers` (e.g. legacy/test users), the client-id check is skipped and the request is allowed with a warning logged. It is only rejected on an actual mismatch.
+</Note>
+
+### Business context by client id
+
+The engine selects a business-context string by `String(clientid)`, falling back to a generic commercial-business prompt for unknown ids.
+
+| clientid | Business |
+|----------|----------|
+| `1` | 9to5 — eyewear retail chain |
+| `2` | Cell Wizard — cellular store + repair lab |
+| `3` | MFL Sliding Doors — field service (sliding doors/windows) |
+| `4` | Neighbors Cafe — café with dine-in + delivery |
+| `12` | Fattal Hotels — hotel chain / reservations |
+| _other_ | Generic: "מדובר בעסק מסחרי…" |
+
+## POST / (message feedback) — record feedback
+
+Persists a thumbs-up/down and its context into `dbo.MessagesUserFeedback`. Defined in `messagesFeedback.js`; the router applies `authenticateUser` and handles `POST /` (mount path is set where the router is registered).
+
+### Request body
+
+| Field | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `platformUserId` | number | Yes | User submitting feedback (`sql.Int`). |
+| `feedback` | string | Yes | Feedback value (`sql.NVarChar(10)` — e.g. up/down). |
+| `username` | string | No | Display name; stored as `''` when absent. |
+| `question` | string | No | The question that was answered. |
+| `answer` | string | No | The answer being rated. |
+| `questionTime` | string | No | When the question was asked (`sql.NVarChar(50)`). |
+| `feedbackMessage` | string | No | Free-text feedback comment. |
+
+### Responses
+
+| Status | Body | Meaning |
+|--------|------|---------|
+| 200 | `{ "success": true }` | Feedback stored. |
+| 400 | `{ "success": false, "message": "platformUserId and feedback are required" }` | Missing required field. |
+| 500 | `{ "success": false, "message": "Failed to save feedback" }` | Insert failed. |
+
+## Environment variables
+
+| Variable | Used by | Meaning |
+|----------|---------|---------|
+| `N8N_CHAT_WEBHOOK_URL` | `POST /chat` | n8n chat webhook target. If unset, `POST /chat` returns `500`. |
+
+## Database tables referenced
+
+| Table | Used by | Purpose |
+|-------|---------|---------|
+| `dbo.PlatformUsers` | chat, conversation-engine | User lookup (`ClientId`, `MobileNumber`) and K-1 client-ownership validation; filtered on `IsActive = 1` for the send path. |
+| `dbo.ConversationSessions` | `POST /chat` | New web session rows (`Source = 'web'`, `SessionId = NEWID()`). |
+| `dbo.ConversationMessages` | chat-sessions reads | Session list, previews, and per-session transcripts (`Role`, `Message`, `CreatedAt`). |
+| `dbo.MessagesUserFeedback` | message feedback | Stores feedback rows with `CreatedAt = GETDATE()`. |
+
+## In-memory stores
+
+| Store | Role |
+|-------|------|
+| `thinkingStepsStore` | Holds generated "thinking steps" per `sessionId` for the waiting UX; populated in the same process that serves `/chat/status`. |
+| `pdfResultStore` | Holds a PDF URL per `sessionId`; when present it overrides the text answer and is deleted after use. |

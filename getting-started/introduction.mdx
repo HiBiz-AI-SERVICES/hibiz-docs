@@ -1,0 +1,124 @@
+---
+title: Introduction
+description: HiBiz is a multi-tenant, natural-language business-intelligence assistant that answers SMB questions over WhatsApp and web chat, grounded in each tenant's SQL Server data.
+---
+
+HiBiz lets small and medium businesses ask questions in plain language — mostly Hebrew, some English — over **WhatsApp** or a **web chat**, and get answers grounded in their own SQL Server database, returned as text and, when useful, charts, tables, KPI cards, or PDF reports. This page orients you to the platform and walks you through running the `ai-chat-server` backend locally so you can make a first chat request.
+
+Reach for this page when you're new to the codebase and need the shape of the system before diving into a specific router, service, or workflow.
+
+## What the platform is
+
+HiBiz is built from **three cooperating runtimes** plus a SQL Server database and a set of managed AI/cloud services. `ai-chat-server` (this repo) is the **backend plus a bundled React SPA**; the AI reasoning runs in **n8n** and a companion **`mcp-server`**.
+
+| Runtime | Responsibility |
+|---|---|
+| **`ai-chat-server`** (this repo) | Stateful backend: conversation memory & session state, the LLM **routing decision**, invoice OCR, embeddings, PDF rendering, web auth + polling, report scheduling, admin tooling. Also serves the bundled React SPA. |
+| **n8n** (2 workflows) | AI orchestration. **Yarin Chat** is the front-door orchestrator (sanitize → route → answer/format); **Yarin SQL** is the NL→SQL data engine it calls as a tool. |
+| **`mcp-server`** (port 3100) | Exposes the SQL Server knowledge base as 8 read-only MCP tools. Separate TypeScript process with its own `package.json`/`.env`. |
+| **MS SQL Server** (`hibiz`) | Holds both tenants' business data and the app's own state (sessions, messages, embeddings cache, config). |
+
+<Note>
+The n8n workflows are the **source of truth for the AI pipeline**, and they live in n8n — not in this repo. The `Yarin Chat.json` / `Yarin SQL.json` files here are reference snapshots only; editing them does nothing until re-imported into n8n.
+</Note>
+
+## Core capabilities
+
+- **Natural-language BI over chat** — users ask questions on WhatsApp or the web SPA and receive grounded answers.
+- **Rich answers** — text plus Chart.js visualizations, tables, KPI cards, and PDF reports for large responses.
+- **Multi-tenant by design** — every tenant is a `ClientId` with stores (`StoreId`) and store-scoped platform users (`dbo.PlatformUserStores`).
+- **Routing brain** — the backend's `POST /api/conversation-engine` produces the routing decision; its `needsSql` field is the **only** thing that gates SQL execution (`route` is informational).
+- **Scheduled reports** — `node-cron` schedulers fire report webhooks into n8n.
+
+## How a request flows
+
+The **web path is fire-and-forget plus polling**. `POST /chat` returns immediately with `status:"processing"`, and the browser polls `GET /chat/status` until an assistant message newer than `since` appears. The **WhatsApp path** enters Yarin Chat directly and replies over the WhatsApp API.
+
+At a glance for a web message:
+
+1. SPA sends `POST /chat`; the backend runs JWT auth, the K-1 client-ownership check, and resolves or creates a session.
+2. Backend fires the webhook into n8n **Yarin Chat**, which sanitizes the message and calls `POST /api/conversation-engine` for the routing decision.
+3. If `needsSql` is true, Yarin Chat calls **Yarin SQL** (the NL→SQL engine); otherwise it writes a conversational answer directly.
+4. Backend saves the assistant message; the SPA's next `GET /chat/status` poll returns the completed answer.
+
+## Prerequisites
+
+Before running the backend locally, have:
+
+- **Node.js** with the repo dependencies installed (`npm install`).
+- A reachable **MS SQL Server** (`hibiz`) database.
+- Configuration in a local **`.env`** (dev) — in production, config comes from **AWS Secrets Manager** secret `hibiz/production`, region `us-east-1`. Reference config by **name** only; never print secret values.
+- The built **SPA** if you want the web UI served (`dist/` is produced by `npm run build`).
+
+<Warning>
+There is **no real test suite** — `npm test` is a no-op. Validate changes by running the server and exercising the affected route, or `npm run build` for the frontend.
+</Warning>
+
+## Run the backend and make a first call
+
+<Steps>
+<Step title="Install dependencies">
+```bash
+npm install
+```
+</Step>
+
+<Step title="Provide configuration">
+Create a local `.env` with the DB connection and required config. The entry chain is `server.js` → `loadSecrets()` → `index.js`: `loadSecrets()` pulls from AWS Secrets Manager in prod or your `.env` in dev, then boots the Express app.
+</Step>
+
+<Step title="(Optional) build the SPA">
+```bash
+npm run build      # vite build → dist/
+```
+The server serves the React app from `dist/` when `dist/index.html` exists.
+</Step>
+
+<Step title="Start the server">
+```bash
+node server.js     # listens on PORT, default 3000
+```
+Or `npm start`, which runs `vite build && node server.js`. In production the process runs under PM2 as app `ai-chat` (`ecosystem.config.js`).
+</Step>
+
+<Step title="Send a chat message">
+`POST /chat` with `userMessage`, `platformUserId`, and `sessionId`. It returns immediately with a `sessionId` and `status:"processing"`, then poll:
+
+```bash
+GET /chat/status
+```
+Repeat until the response reports `status:"completed"` with the answer.
+</Step>
+</Steps>
+
+## Verify it worked
+
+- The server logs indicate the app booted and, if present, that the **React app is served from `/dist`** and the DB pre-warm completed.
+- A `POST /chat` returns a JSON body containing `sessionId` and `status:"processing"`.
+- A subsequent `GET /chat/status` eventually returns `status:"completed"` and the answer.
+
+If chat requests reach the backend but never complete, the AI pipeline lives in **n8n** and **Yarin SQL** — a routing or SQL change often needs edits there, not just in this repo.
+
+## Guardrails to keep in mind
+
+- **Multi-tenancy is sacred.** Everything is scoped by `ClientId` (and store-level by `StoreId` / `PlatformUserStores`). Keep the **K-1** (user↔ClientId) and **G-2** (session ownership) auth checks intact; never write code or SQL that could cross tenants.
+- **Hebrew / RTL everywhere.** User-facing strings, prompts, and templates are Hebrew with specific emojis and `\n` layout — preserve them exactly.
+- **Parameterized DB access only.** Go through the `services/db.js` pool with `.input(...)`; never string-concatenate user input into SQL. Generated SQL stays **SELECT-only and ClientId-scoped**.
+- **Never print, echo, or commit secrets.** `.env`, `VAULT.md`, and the workflow JSONs are git-ignored — keep them that way.
+
+## Next steps
+
+<CardGroup cols={2}>
+<Card title="System architecture" icon="sitemap">
+Read `ARCHITECTURE.md` for the full end-to-end picture — orchestration, data model, integrations, and the security architecture.
+</Card>
+<Card title="Repo map & commands" icon="folder-tree">
+See `CLAUDE.md` for the `routes/`, `services/`, and `middleware/` layout plus dev commands.
+</Card>
+<Card title="Config & credentials" icon="key">
+Check `VAULT.md` for the non-secret map of every env var and where it lives (names and purpose, no values).
+</Card>
+<Card title="MCP knowledge base" icon="plug">
+Explore `mcp-server/` (port 3100) — the 8 read-only SQL KB tools, with its own `package.json` and `.env`.
+</Card>
+</CardGroup>
