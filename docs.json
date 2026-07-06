@@ -29,8 +29,7 @@
       {
         "group": "Architecture",
         "pages": [
-          "architecture/data-flow",
-          "architecture/mcp-server-design"
+          "architecture/data-flow"
         ]
       },
       {
@@ -38,7 +37,6 @@
         "pages": [
           "reference/chat-routes",
           "reference/services-api",
-          "reference/mcp-tools",
           "reference/database-layer"
         ]
       }

@@ -6,8 +6,6 @@ pages:
     sources:
       - repo: ai-chat-server
         globs:
-          - ARCHITECTURE.md
-          - CLAUDE.md
           - index.js
           - server.js
           - ecosystem.config.js
@@ -26,7 +24,6 @@ pages:
     sources:
       - repo: ai-chat-server
         globs:
-          - ARCHITECTURE.md
           - index.js
           - server.js
           - routes/**/*.js
@@ -69,12 +66,9 @@ pages:
       - repo: ai-chat-server
         globs:
           - services/llm/**/*.js
-          - services/mcp/**/*.js
-          - services/ocr/**/*.js
           - routes/embeddings.js
           - services/llm/bedrockClient.js
           - services/llm/embeddingsClient.js
-          - services/llm/mcpBedrockAgentClient.js
     judge_required: true
   - path: architecture/data-flow.mdx
     sources:
@@ -86,23 +80,6 @@ pages:
           - routes/embeddings.js
           - routes/messagesFeedback.js
           - services/db.js
-    judge_required: true
-  - path: architecture/mcp-server-design.mdx
-    sources:
-      - repo: ai-chat-server
-        globs:
-          - mcp-server/MCP-STRUCTURE.md
-          - mcp-server/README.md
-          - mcp-server/src/**/*.ts
-        symbols:
-          - registerBusinessRules
-          - registerClientConfig
-          - registerEnumValues
-          - registerExecuteQuery
-          - registerProductCategories
-          - registerQueryPattern
-          - registerSchemaAnnotations
-          - registerTableSchema
     judge_required: true
   - path: reference/chat-routes.mdx
     sources:
@@ -119,30 +96,11 @@ pages:
           - services/db.js
           - services/conversationEngine.js
           - services/emailClient.js
-          - services/gmailClient.js
           - services/llm/**/*.js
-          - services/currencyConverter.js
           - services/unitConverter.js
           - services/otp.js
-  - path: reference/mcp-tools.mdx
-    sources:
-      - repo: ai-chat-server
-        globs:
-          - mcp-server/src/tools/**/*.ts
-        symbols:
-          - registerBusinessRules
-          - registerClientConfig
-          - registerEnumValues
-          - registerExecuteQuery
-          - registerProductCategories
-          - registerQueryPattern
-          - registerSchemaAnnotations
-          - registerTableSchema
   - path: reference/database-layer.mdx
     sources:
       - repo: ai-chat-server
         globs:
           - services/db.js
-          - mcp-server/src/db.ts
-        symbols:
-          - getPool

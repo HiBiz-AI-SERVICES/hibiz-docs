@@ -9,13 +9,12 @@ Reach for this page when you're new to the codebase and need the shape of the sy
 
 ## What the platform is
 
-HiBiz is built from **three cooperating runtimes** plus a SQL Server database and a set of managed AI/cloud services. `ai-chat-server` (this repo) is the **backend plus a bundled React SPA**; the AI reasoning runs in **n8n** and a companion **`mcp-server`**.
+HiBiz is built from **two cooperating runtimes** plus a SQL Server database and a set of managed AI/cloud services. `ai-chat-server` (this repo) is the **backend plus a bundled React SPA**; the AI reasoning runs in **n8n**.
 
 | Runtime | Responsibility |
 |---|---|
-| **`ai-chat-server`** (this repo) | Stateful backend: conversation memory & session state, the LLM **routing decision**, invoice OCR, embeddings, PDF rendering, web auth + polling, report scheduling, admin tooling. Also serves the bundled React SPA. |
+| **`ai-chat-server`** (this repo) | Stateful backend: conversation memory & session state, the LLM **routing decision**, embeddings, PDF rendering, web auth + polling, report scheduling, admin tooling. Also serves the bundled React SPA. |
 | **n8n** (2 workflows) | AI orchestration. **Yarin Chat** is the front-door orchestrator (sanitize → route → answer/format); **Yarin SQL** is the NL→SQL data engine it calls as a tool. |
-| **`mcp-server`** (port 3100) | Exposes the SQL Server knowledge base as 8 read-only MCP tools. Separate TypeScript process with its own `package.json`/`.env`. |
 | **MS SQL Server** (`hibiz`) | Holds both tenants' business data and the app's own state (sessions, messages, embeddings cache, config). |
 
 <Note>
@@ -117,8 +116,5 @@ See `CLAUDE.md` for the `routes/`, `services/`, and `middleware/` layout plus de
 </Card>
 <Card title="Config & credentials" icon="key">
 Check `VAULT.md` for the non-secret map of every env var and where it lives (names and purpose, no values).
-</Card>
-<Card title="MCP knowledge base" icon="plug">
-Explore `mcp-server/` (port 3100) — the 8 read-only SQL KB tools, with its own `package.json` and `.env`.
 </Card>
 </CardGroup>

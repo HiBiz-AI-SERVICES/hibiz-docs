@@ -1,6 +1,6 @@
 ---
 title: Architecture Overview
-description: HiBiz is a multi-tenant natural-language business-intelligence assistant that answers questions over each tenant's own SQL database via three cooperating runtimes — the ai-chat-server backend, two n8n orchestration workflows, and an MCP SQL knowledge base.
+description: HiBiz is a multi-tenant natural-language business-intelligence assistant that answers questions over each tenant's own SQL database via two cooperating runtimes — the ai-chat-server backend and two n8n orchestration workflows.
 ---
 
 HiBiz lets end users of small and medium businesses ask questions in plain language (mostly Hebrew, some English) over **WhatsApp** or a **web chat**, and get answers grounded in their own business database — as text and, when useful, charts, tables, KPI cards, or PDF reports. This page is the map: read it to understand which runtime owns which responsibility and how a single question flows through the system before diving into any one component.
@@ -9,13 +9,12 @@ HiBiz lets end users of small and medium businesses ask questions in plain langu
 
 The core problem is turning a natural-language business question into a **safe, tenant-scoped SQL answer** without exposing the database to the user or letting one tenant see another's data. HiBiz solves this by splitting the work across specialized runtimes: an LLM decides *what the user wants*, a multi-stage pipeline turns the intent into SQL, and a stateful backend keeps conversation memory and enforces tenant ownership.
 
-The system is composed of **three cooperating runtimes** plus a SQL Server database and a set of managed AI/cloud services:
+The system is composed of **two cooperating runtimes** plus a SQL Server database and a set of managed AI/cloud services:
 
 | Component | Role |
 |---|---|
-| **`ai-chat-server`** (backend) | Stateful backend: conversation memory & session state, the LLM **routing decision**, invoice OCR, embeddings, PDF rendering, web auth + polling, report scheduling, admin tooling. Node.js / Express 5. |
+| **`ai-chat-server`** (backend) | Stateful backend: conversation memory & session state, the LLM **routing decision**, embeddings, PDF rendering, web auth + polling, report scheduling, admin tooling. Node.js / Express 5. |
 | **n8n workflows** | AI orchestration: intake, injection defense, routing, the multi-stage NL→SQL pipeline, and answer/visualization formatting. Two workflows: **Yarin Chat** (orchestrator) and **Yarin SQL** (data engine). |
-| **`mcp-server`** (port 3100) | Exposes the SQL Server knowledge base as 8 read-only MCP tools for a query-planner agent. |
 | **MS SQL Server** (`hibiz`) | Holds both the tenants' business data and the app's own state (sessions, messages, embeddings cache, config). |
 | **Lambdas** | ~20 standalone jobs syncing external POS / payment / delivery systems into the DB. |
 
@@ -33,7 +32,6 @@ flowchart TB
     subgraph Backend["ai-chat-server backend"]
         API["REST API (~30 routers)"]
         CE["Conversation Engine: routing brain + memory"]
-        OCR["Document / OCR pipeline"]
         SCHED["Report schedulers (node-cron)"]
         EMB["Embeddings endpoint"]
         PDF["PDF renderer"]
@@ -44,18 +42,12 @@ flowchart TB
         SQLWF[["Yarin SQL: NL-to-SQL engine"]]
     end
 
-    subgraph MCP["mcp-server port 3100"]
-        TOOLS["8 read-only SQL KB tools"]
-    end
-
     DB[("MS SQL Server (hibiz)")]
 
     subgraph Cloud["Managed services"]
         BED["AWS Bedrock: Claude"]
-        S3[("AWS S3")]
         SM["AWS Secrets Manager"]
         COH["Cohere embeddings"]
-        GEM["Google Gemini OCR"]
         GDOC["Google Docs: per-client schema"]
         SLACK["Slack webhooks"]
     end
@@ -64,7 +56,6 @@ flowchart TB
     WEB -->|POST /chat| API
     API -->|fire webhook| CHAT
     CHAT <-->|HTTP callbacks| CE
-    CHAT --> OCR
     CHAT -->|tool call| SQLWF
     SQLWF <-->|embeddings API| EMB
     SQLWF -->|large-response PDF| PDF
@@ -74,11 +65,8 @@ flowchart TB
     CHAT --> BED
     CE --> DB
     CE --> BED
-    OCR --> GEM
-    OCR --> S3
     EMB --> COH
     SCHED -->|report webhook| N8N
-    TOOLS --> DB
     API --> SM
     API --> SLACK
 ```
@@ -87,8 +75,8 @@ flowchart TB
 
 - **Backend:** Node.js, Express 5, `mssql`, `axios`, JWT + OTP auth, Helmet / CORS / rate-limiting, `node-cron`.
 - **Frontend:** React 18 + Vite SPA (same repo, built to `dist/`), Chart.js for visualizations. `npm start` = `vite build && node server.js`.
-- **AI:** AWS Bedrock (Claude **Opus 4.6**, **Sonnet 4.5**, **Haiku 4.5** via inference profiles), Cohere multilingual embeddings, Google Gemini (invoice OCR).
-- **Infra:** AWS Secrets Manager (prod config from secret `hibiz/production`, region `us-east-1`), S3 (invoice / PDF storage), PM2 (app `ai-chat`), separate TypeScript MCP server on port 3100.
+- **AI:** AWS Bedrock (Claude **Opus 4.6**, **Sonnet 4.5**, **Haiku 4.5** via inference profiles), Cohere multilingual embeddings.
+- **Infra:** AWS Secrets Manager (prod config from secret `hibiz/production`, region `us-east-1`), PM2 (app `ai-chat`).
 - **Orchestration:** n8n (`n8n.hibiz.dev`).
 
 ## The end-to-end request lifecycle (web chat)
@@ -141,15 +129,15 @@ Every tenant is a `ClientId`; a tenant has stores (`StoreId`) and platform users
 - **Full schema + business rules** — per-client **Google Docs** (mapped in Yarin SQL's `Choose Docs Prompt` node), exported to large `prompts/*.md` files.
 
 <Warning>
-Tenant isolation is enforced in depth, not at a single boundary: the backend runs a `ClientId` ownership check, the workflow validates store access, and the MCP `execute_query` tool requires that `ClientId` appear in every SQL statement. A change to one layer does not relax the others.
+Tenant isolation is enforced in depth, not at a single boundary: the backend runs a `ClientId` ownership check and the workflow validates store access. A change to one layer does not relax the others.
 </Warning>
 
 ## Key design decisions and trade-offs
 
 - **Orchestration lives in n8n, state lives in the backend.** The two n8n workflows own the AI pipeline (sanitize → route → NL→SQL → format), while `ai-chat-server` owns everything stateful (sessions, memory, the routing *decision* it exposes at `/api/conversation-engine`). This keeps prompt/pipeline changes out of a code deploy, at the cost of a distributed flow spanning HTTP webhooks and callbacks.
 - **Web is asynchronous, WhatsApp is synchronous.** The web path decouples request from answer with polling so a slow multi-stage SQL pipeline never blocks the HTTP response; WhatsApp, already async by nature, replies through its own API.
-- **Isolated LLM clients per purpose.** Bedrock access is deliberately split into separate modules so their responsibilities never bleed together: `bedrockClient.js` is plain text-in/text-out **reserved for the Conversation Engine**, while `mcpBedrockAgentClient.js` runs a **tool-use agent loop** (iterating on `stop_reason === 'tool_use'` up to `maxIterations`, default 8) for the MCP business-context route. Embeddings use their own credentials in `embeddingsClient.js` (Cohere `cohere.embed-multilingual-v3` via Bedrock, batched at 96 texts per call).
-- **Two paths to schema knowledge.** The NL→SQL engine can be grounded either by per-client Google-Doc schema prompts or by the `mcp-server`'s 8 read-only SQL tools — companion strategies rather than a single source of truth.
+- **Isolated LLM clients per purpose.** Bedrock access is deliberately split into separate modules so their responsibilities never bleed together: `bedrockClient.js` is plain text-in/text-out **reserved for the Conversation Engine**, while embeddings use their own credentials in `embeddingsClient.js` (Cohere `cohere.embed-multilingual-v3` via Bedrock, batched at 96 texts per call).
+- **Schema knowledge from per-client Google Docs.** The NL→SQL engine is grounded by per-client Google-Doc schema prompts, exported to large `prompts/*.md` files — its single source of schema truth.
 - **Secrets before app.** The process boots `server.js` → `loadSecrets()` → `index.js`, so production config from `hibiz/production` is loaded before the Express app (with its ~30 routers, static SPA/site, schedulers, and DB pre-warm) initializes.
 
 ## Where it lives in the code
@@ -163,9 +151,7 @@ Start with these entry points to go deeper:
 | Security middleware (Helmet CSP, CORS, rate limits) | `ai-chat-server/index.js` |
 | Conversation Engine routing + tenant context | `ai-chat-server/routes/conversationEngine.js` |
 | Conversation Engine LLM client | `ai-chat-server/services/llm/bedrockClient.js` |
-| MCP tool-use agent loop | `ai-chat-server/services/llm/mcpBedrockAgentClient.js` |
 | Embeddings (Cohere via Bedrock) | `ai-chat-server/services/llm/embeddingsClient.js` |
-| SQL knowledge-base tools | `mcp-server` (port 3100) |
 
 <Note>
 The `index.js` middleware stack encodes several defense-in-depth defaults worth knowing before you touch request handling: a strict Helmet **Content-Security-Policy** with hashed inline scripts, an allow-list **CORS** policy (localhost, `*.hibiz.dev`, `*.base44.app`, plus `CORS_ORIGINS`), and layered **rate limiters** — 5 logins / 15 min, 10 OTPs / 15 min, 200 API requests / min per IP, and per-`platformUserId` limiters (30 / min) that fall back to IP when the user id is absent to prevent bypass.

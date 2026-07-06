@@ -1,52 +1,33 @@
 ---
 title: Database & Schema
-description: Reference for the SQL Server connection pools, query utilities, and data-access functions that back the AI chat server and MCP server.
+description: Reference for the SQL Server connection pools, query utilities, and data-access functions that back the AI chat server.
 ---
 
 The data layer wraps Microsoft SQL Server (AWS RDS) through the `mssql` driver, exposing lazily-initialized connection pools and a set of parameterized query helpers. Reach for this page when you need the exact signature, parameters, and return shape of a pool accessor or query function — or the connection config and safety constraints that govern them.
 
-Two independent modules provide database access:
+Database access is provided by a single module:
 
 | Module | Language | Exports | Purpose |
 |--------|----------|---------|---------|
-| `ai-chat-server/mcp-server/src/db.ts` | TypeScript | `getPool`, `sql` | Single hardened pool for the MCP server (non-admin account enforced) |
 | `ai-chat-server/services/db.js` | JavaScript | pool accessors + query helpers | PROD/DEV pools and the chat server's data-access functions |
 
-Both modules read connection settings from environment variables via `dotenv` and never hardcode credentials.
+The module reads connection settings from environment variables via `dotenv` and never hardcodes credentials.
 
 ## Connection configuration
 
-Connection settings are assembled from environment variables at module load. The two modules read overlapping but not identical variable names.
+Connection settings are assembled from environment variables at module load.
 
-| Variable | Used by | Meaning |
-|----------|---------|---------|
-| `DB_USER` | both | SQL login user |
-| `DB_PASSWORD` | both | SQL login password |
-| `DB_SERVER` | mcp-server (preferred) | Server host (MCP-spec name) |
-| `DB_HOST` | mcp-server (fallback), services | Server host |
-| `DB_DATABASE` | mcp-server (preferred) | Database name (MCP-spec name) |
-| `DB_NAME` | mcp-server (fallback), services (PROD) | Database name |
-| `DB_DEV_NAME` | services (DEV) | DEV database name; falls back to `DB_NAME` if unset |
+| Variable | Meaning |
+|----------|---------|
+| `DB_USER` | SQL login user |
+| `DB_PASSWORD` | SQL login password |
+| `DB_HOST` | Server host |
+| `DB_NAME` | Database name (PROD) |
+| `DB_DEV_NAME` | DEV database name; falls back to `DB_NAME` if unset |
 
-Both modules set the same `options`: `encrypt: true`, `trustServerCertificate: true`, `enableArithAbort: true` — required for AWS RDS SSL connections (note: `trustServerCertificate` is `true` for AWS, unlike Azure).
+The `options` are set to `encrypt: true`, `trustServerCertificate: true`, `enableArithAbort: true` — required for AWS RDS SSL connections (note: `trustServerCertificate` is `true` for AWS, unlike Azure).
 
-The MCP pool caps concurrency with `pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }`. The services pools set `requestTimeout: 120000` (2 minutes) to allow long-running report queries.
-
-<Warning>
-The MCP server refuses to start with an admin account. At module load, `db.ts` throws `"MCP server must not run with an admin DB account. Use hibiz_mcp."` if `DB_USER` is exactly `sa` or contains `admin` (case-insensitive).
-</Warning>
-
-## MCP server pool — `getPool`
-
-Returns a connected, shared `mssql.ConnectionPool` for the MCP server, creating it on first call and reconnecting if the cached pool has dropped. This is the only pool accessor exposed by the MCP data layer.
-
-**Signature:** `getPool(): Promise<sql.ConnectionPool>`
-
-- Lazily initializes a module-level `_pool`. On each call it checks `!_pool || !_pool.connected`; if either holds, it constructs a new `ConnectionPool(config)` and awaits `.connect()`.
-- Logs `"✅ MCP Server connected to SQL Server"` on a fresh connection.
-- The raw `mssql` module is re-exported as `sql` for building typed requests (`sql.Int`, etc.).
-
-**Returns:** a live `sql.ConnectionPool`.
+The services pools set `requestTimeout: 120000` (2 minutes) to allow long-running report queries.
 
 ## Chat server pools
 
@@ -107,21 +88,6 @@ Returns the distinct, non-blank employee names scheduled for a client.
 
 Queries `dbo.WorkSchedule` for distinct `EmployeeName`, excluding NULL and whitespace-only values, ordered by name. **Returns:** an array of employee-name strings (the `recordset` mapped to `row.EmployeeName`).
 
-### `insertWeeklyKpi({ ... })`
-
-Upserts a weekly KPI row via a SQL `MERGE` on `dbo.Kpi`, keyed by client, store, and date range.
-
-| Field | Type | Required | Meaning |
-|-------|------|----------|---------|
-| `clientId` | int | yes | `@ClientId` |
-| `storeId` | int | yes | `@StoreId` |
-| `StartDate` | date | yes | `@StartDate` |
-| `EndDate` | date | yes | `@EndDate` |
-| `salesKpi` | int | yes | `@SalesKpi` |
-| `joinsKpi` | int | yes | `@JoinsKpi` |
-
-Match key: `ClientId`, `StoreId`, `StartDate`, `EndDate`. On match, updates `SalesKpi`, `JoinsKpi`, and `UpdatedAt = GETDATE()`; otherwise inserts a new row with `CreatedAt`/`UpdatedAt` set to `GETDATE()`. **Returns:** nothing (`Promise<void>`); logs an upsert confirmation.
-
 ### `runDynamicQuery({ ... })`
 
 Executes a dynamic query against SQL Server, either from a raw SQL string or by building a `SELECT` from a filter object, with automatic parameter binding.
@@ -149,12 +115,9 @@ In `runDynamicQuery`, filter values from `query` are interpolated directly into 
 
 | Symbol | Module | Kind |
 |--------|--------|------|
-| `getPool` | `mcp-server/src/db.ts` | async pool accessor |
-| `sql` | `mcp-server/src/db.ts` | re-exported `mssql` module |
 | `connectToDatabase` | `services/db.js` | async PROD pool accessor |
 | `getDevPool` | `services/db.js` | async DEV pool accessor |
 | `fillRequiredFields` | `services/db.js` | pure query transform |
 | `getStoresForClient` | `services/db.js` | query helper |
 | `getEmployeesForClient` | `services/db.js` | query helper |
-| `insertWeeklyKpi` | `services/db.js` | upsert helper |
 | `runDynamicQuery` | `services/db.js` | dynamic query executor |

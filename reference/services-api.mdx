@@ -1,9 +1,9 @@
 ---
 title: Services Reference
-description: API reference for the ai-chat-server service layer — database access, transactional email, Gmail/OAuth ingestion, OTP auth, currency conversion, and the conversation intelligence engine.
+description: API reference for the ai-chat-server service layer — database access, transactional email, OTP auth, and the conversation intelligence engine.
 ---
 
-The `ai-chat-server/services/` directory holds the server's shared service modules: SQL Server access, email sending, Gmail ingestion, one-time-password auth, currency conversion, and the LLM-backed conversation engine. Reach for this page when you need the exact export names, parameters, return shapes, and environment variables of a service before calling it from a route or another module.
+The `ai-chat-server/services/` directory holds the server's shared service modules: SQL Server access, email sending, one-time-password auth, and the LLM-backed conversation engine. Reach for this page when you need the exact export names, parameters, return shapes, and environment variables of a service before calling it from a route or another module.
 
 Each service is a CommonJS module that exports plain functions via `module.exports`; there are no classes. Every module reads its secrets from `process.env` (loaded once via `dotenv`).
 
@@ -19,9 +19,6 @@ All services are configured entirely through environment variables. The table be
 | `DB_NAME` | `db.js` | Yes | PROD database name (also DEV fallback) |
 | `DB_DEV_NAME` | `db.js` | No | DEV database name; falls back to `DB_NAME` |
 | `SMTP_PASS` | `emailClient.js` | Yes | Gmail SMTP app password; `getTransporter()` throws if unset |
-| `GOOGLE_CLIENT_ID` | `gmailClient.js` | Yes | Google OAuth2 client ID |
-| `GOOGLE_CLIENT_SECRET` | `gmailClient.js` | Yes | Google OAuth2 client secret |
-| `GOOGLE_REDIRECT_URI` | `gmailClient.js` | Yes | OAuth2 redirect URI |
 
 <Note>
 `emailClient.js` hardcodes the SMTP user (`support@hibiz.dev`), the `From` header (`HiBiz AI <support@hibiz.dev>`), and the host (`smtp.gmail.com:587`). Only the password comes from the environment.
@@ -41,7 +38,6 @@ Manages `mssql` connection pools to AWS RDS SQL Server and exposes query helpers
 | `fillRequiredFields` | `(query, requiredFields?) => object` | Deep-cloned query with time-preset placeholders replaced by `Date`s |
 | `getStoresForClient` | `(clientId) => Promise<Store[]>` | `recordset` of `{ StoreId, Name, Location }` |
 | `getEmployeesForClient` | `(clientId) => Promise<string[]>` | Distinct non-empty `EmployeeName` values, alphabetically |
-| `insertWeeklyKpi` | `({ clientId, storeId, StartDate, EndDate, salesKpi, joinsKpi }) => Promise<void>` | Upserts a `dbo.Kpi` row (MERGE) |
 | `runDynamicQuery` | `({ query?, collection?, rawSQL?, clientId?, queryParams? }) => Promise<object>` | Query result rows or a `{ message }` object |
 
 ### `runDynamicQuery(options)`
@@ -103,50 +99,6 @@ Selects the newest unused, unexpired code, increments its attempt count, and res
 | `false` | `max_attempts` | Attempt count exceeded 3 (code is marked used) |
 | `false` | `invalid_code` | Hash mismatch |
 | `true` | — | Match; code is marked used |
-
-## `gmailClient.js` — Gmail OAuth & ingestion
-
-Wraps `googleapis` to run the Gmail read-only OAuth2 flow and pull inbox messages. Every function builds a fresh `google.auth.OAuth2` client from the `GOOGLE_*` env vars; the requested scope is `https://www.googleapis.com/auth/gmail.readonly`.
-
-| Function | Signature | Returns |
-|----------|-----------|---------|
-| `getAuthUrl` | `(platformUserId) => string` | Consent URL (`access_type: 'offline'`, `prompt: 'consent'`, `state` = user id) |
-| `exchangeCode` | `(code) => Promise<tokens>` | OAuth2 token set from an authorization code |
-| `getGmailAddress` | `(tokens) => Promise<string>` | The authenticated account's email address |
-| `getEmails` | `(refreshToken, maxResults?, pageToken?) => Promise<{ emails, nextPageToken }>` | Inbox message metadata list |
-| `getEmailBody` | `(refreshToken, messageId) => Promise<object>` | Full message with decoded body + attachments |
-| `getAttachmentData` | `(refreshToken, messageId, attachmentId) => Promise<string>` | Base64 (converted from base64url) attachment data |
-
-### `getEmails`
-
-Lists `INBOX` messages and fetches per-message metadata headers. `maxResults` defaults to `20`, `pageToken` defaults to `null`. Each item in `emails` is `{ id, subject, from, date, snippet }`; `nextPageToken` is `null` when there are no more pages.
-
-### `getEmailBody`
-
-Fetches the `full` message and walks the MIME parts to extract the first `text/plain` body (base64-decoded) and any file attachments. Returns:
-
-| Field | Type | Meaning |
-|-------|------|---------|
-| `id` | string | Message id |
-| `subject` / `from` / `date` | string | Header values (empty string if absent) |
-| `snippet` | string | Gmail snippet |
-| `body` | string | Decoded plain-text body |
-| `attachments` | array | `{ attachmentId, filename, mimeType, size }` per attachment |
-
-## `currencyConverter.js` — exchange rates
-
-Fetches historical currency-to-ILS rates from the free Frankfurter API (ECB data, no key). Results are memoized in-process per `currency:date` key.
-
-| Function | Signature | Returns |
-|----------|-----------|---------|
-| `getIlsRate` | `(currency, date?) => Promise<number \| null>` | ILS rate (1 unit = X ILS), or `null` |
-
-| Parameter | Type | Required | Meaning |
-|-----------|------|----------|---------|
-| `currency` | string | Yes | Currency code, e.g. `'EUR'`, `'USD'` (upper-cased internally) |
-| `date` | string | No | `YYYY-MM-DD`; defaults to today (UTC-sliced) |
-
-Returns `null` when the currency is already ILS (`ILS`, `NIS`, `₪`), when the input is empty, or when the request fails or returns no `rates.ILS` (the failure is logged as a warning, not thrown). The HTTP request has a 5000 ms timeout.
 
 ## `conversationEngine.js` — conversation intelligence
 

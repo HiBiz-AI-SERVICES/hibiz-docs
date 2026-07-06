@@ -2,6 +2,7 @@
 .docsync/state/
 .docsync/bootstrap-report.md
 docsync-bootstrap.patch
+docsync.patch
 
 # Mintlify local dev cache
 .mintlify/
