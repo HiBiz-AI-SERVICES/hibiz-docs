@@ -1,0 +1,73 @@
+# CI for the docs site. The org ruleset requires one check named ci-gate in every repo (KAN-490).
+# validate checks what can break the Mintlify build without a network call: docs.json parses,
+# every page it lists exists, and no file carries a merge conflict marker.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docs.json parses and every listed page exists
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          cfg = json.load(open("docs.json"))
+          pages = []
+          def walk(node):
+              if isinstance(node, dict):
+                  for key, value in node.items():
+                      if key == "pages" and isinstance(value, list):
+                          pages.extend(p for p in value if isinstance(p, str))
+                      walk(value)
+              elif isinstance(node, list):
+                  for item in node:
+                      walk(item)
+          walk(cfg)
+          missing = [p for p in pages if not any(os.path.isfile(p + ext) for ext in (".mdx", ".md"))]
+          print(f"{len(pages)} pages listed, {len(missing)} missing")
+          if not pages or missing:
+              sys.exit(f"docs.json: no pages or missing files: {missing}")
+          PY
+
+      - name: No merge conflict markers
+        run: |
+          if git grep -nE '^(<<<<<<<|>>>>>>>) ' -- . ; then
+            echo "merge conflict markers found"; exit 1
+          fi
+
+  ci-gate:
+    name: ci-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [validate]
+    if: always()
+    steps:
+      - name: Every needed job succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS_JSON" | python3 -c '
+          import json, sys
+          needs = json.load(sys.stdin)
+          bad = {k: v["result"] for k, v in needs.items() if v["result"] != "success"}
+          print("needed:", {k: v["result"] for k, v in needs.items()})
+          sys.exit(f"ci-gate: not passed: {bad}" if bad or not needs else 0)
+          '
